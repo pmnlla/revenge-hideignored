@@ -1,0 +1,10 @@
+{
+    "$meta": {
+        "name": "puppy's plugins",
+        "description": "Personal Revenge plugins"
+    },
+    "hideignoredfriends": {
+        "version": "1.0.0",
+        "alwaysFetch": true
+    }
+}

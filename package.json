@@ -1,0 +1,11 @@
+{
+  "name": "revenge-hideignored",
+  "description": "Revenge plugin repo: hide ignored users from the friends list",
+  "private": true,
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "devDependencies": {
+    "spitroast": "^2.1.6"
+  }
+}
