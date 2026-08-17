@@ -46,6 +46,7 @@ function makeVendetta({ rows = ROWS, relationshipStore = null } = {}) {
             metro: {
                 findByStoreName: n => stores[n],
                 findAll: pred => { modules.forEach(m => pred(m)); return []; },
+                findByProps: p => (p === "FriendsSections" ? { FriendsSections: { ONLINE: "ONLINE", ALL: "ALL" } } : undefined),
                 common: { clipboard: { setString() {} } }
             },
             ui: { toasts: { showToast() {} } },
@@ -89,20 +90,38 @@ const rowsOf = v => v.metro.findByStoreName("FriendsStore").getState().rows;
     assert.match(t.logs[0] ?? "", /no ignoredUser/, "should report the fallback");
 }
 
-// 4. missing FriendsStore reports, and the probe dumps what the build does have
+// 4. no FriendsStore (the real Android case): fall back to filtering getFriendIDs,
+//    and dump the buckets that locate the list's real data source
+{
+    const t = makeVendetta();
+    const rs = {
+        getFriendIDs: () => ["1", "2", "3"],
+        isIgnored: id => id === "2"
+    };
+    t.vendetta.metro.findByStoreName = n => (n === "RelationshipStore" ? rs : undefined);
+    const p = load(t.vendetta);
+    p.onLoad();
+
+    assert.deepEqual(rs.getFriendIDs(), ["1", "3"], "ignored ids must be filtered out");
+    p.onUnload();
+    assert.deepEqual(rs.getFriendIDs(), ["1", "2", "3"], "onUnload must restore getFriendIDs");
+
+    const dump = t.logs[0] ?? "";
+    assert.match(dump, /filtering RelationshipStore\.getFriendIDs instead/);
+    assert.match(dump, /exported keys total: \d+/);
+    assert.match(dump, /hooks \(1\): \[useFriendsList\]/, "hook bucket should catch the data source");
+    assert.match(dump, /FriendsSections: /);
+}
+
+// 5. no FriendsStore and no usable RelationshipStore: say so rather than pretend
 {
     const t = makeVendetta();
     t.vendetta.metro.findByStoreName = () => undefined;
     load(t.vendetta).onLoad();
-    const dump = t.logs[0] ?? "";
-    assert.match(dump, /no FriendsStore/);
-    assert.match(dump, /stores total: 3/, "should count stores, skipping the one that throws");
-    assert.match(dump, /store matches: \[FriendsRowStore,RelationshipStore\]/, "should filter to relevant names");
-    assert.match(dump, /RelationshipStore: not found/);
-    assert.match(dump, /friend-ish exports: \[useFriendsList\]/);
+    assert.match(t.logs[0] ?? "", /getFriendIDs fallback unavailable too/);
 }
 
-// 5. an unexpected section value is reported, not silently ignored
+// 6. an unexpected section value is reported, not silently ignored
 {
     const t = makeVendetta();
     load(t.vendetta).onLoad();
@@ -110,8 +129,8 @@ const rowsOf = v => v.metro.findByStoreName("FriendsStore").getState().rows;
     assert.match(t.logs[0] ?? "", /unexpected section value 3/);
 }
 
-// 6. the file is a single expression starting at line 1 col 1 — a leading comment or
+// 7. the file is a single expression starting at line 1 col 1 — a leading comment or
 //    newline would make `return\n...` hit ASI and silently load an empty plugin
 assert.ok(/^\(/.test(js), "index.js must start with '(' or the loader's return hits ASI");
 
-console.log("ok: 6/6 — gating, both ignored paths, unload, failure reports, ASI guard");
+console.log("ok: 7/7 — gating, both ignored paths, getFriendIDs fallback, unload, reports, ASI guard");

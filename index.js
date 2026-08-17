@@ -26,60 +26,58 @@
         }
     }
 
-    // Called when the expected store isn't there: dump what this build actually has,
-    // so the next version can target it instead of guessing again.
+    // This build has no rows-container store, so find what actually feeds the list.
+    // Buckets are narrow on purpose: the first pass hit a flat cap and truncated
+    // alphabetically at "c", hiding every use*/get* name.
     function probe() {
         var lines = [];
-        var names = [];
+        var keys = {};
 
         try {
-            var seen = {};
-            metro.findAll(function (m) {
-                try {
-                    if (m && typeof m.getName === "function" && m.getName.length === 0) {
-                        var n = m.getName();
-                        if (typeof n === "string") seen[n] = 1;
-                    }
-                } catch (e) { /* lazy module blew up on access; skip it */ }
-                return false;
-            });
-            names = Object.keys(seen).sort();
-        } catch (e) {
-            lines.push("store scan failed: " + e);
-        }
-
-        lines.push("stores total: " + names.length);
-        lines.push("store matches: [" + names.filter(function (n) { return /friend|relation|ignor/i.test(n); }) + "]");
-
-        var rs = metro.findByStoreName("RelationshipStore");
-        if (rs) {
-            var keys = [];
-            for (var o = rs; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
-                keys = keys.concat(Object.getOwnPropertyNames(o));
-            }
-            lines.push("RelationshipStore: [" + keys.filter(function (k) {
-                return /ignor|blocked|friend|relationship/i.test(k);
-            }).sort() + "]");
-        } else {
-            lines.push("RelationshipStore: not found");
-        }
-
-        try {
-            var props = {};
             metro.findAll(function (m) {
                 if (m && typeof m === "object") {
                     try {
-                        Object.keys(m).forEach(function (k) { if (/friend/i.test(k)) props[k] = 1; });
+                        Object.keys(m).forEach(function (k) { keys[k] = 1; });
                     } catch (e) { /* exotic export; skip */ }
                 }
                 return false;
             });
-            lines.push("friend-ish exports: [" + Object.keys(props).sort().slice(0, 60) + "]");
         } catch (e) {
             lines.push("export scan failed: " + e);
         }
 
+        var all = Object.keys(keys).sort();
+        function bucket(label, re, cap) {
+            var hits = all.filter(function (k) { return re.test(k); });
+            lines.push(label + " (" + hits.length + "): [" + hits.slice(0, cap || 40) + "]");
+        }
+
+        lines.push("exported keys total: " + all.length);
+        bucket("hooks", /^use.*(friend|relationship|ignor)/i);
+        bucket("getters", /^get.*(friend|relationship)/i);
+        bucket("rowish", /(friend|relationship).*(row|list|item|section|screen|tab)|(row|list|screen).*(friend|relationship)/i, 60);
+
+        try {
+            var sections = metro.findByProps("FriendsSections");
+            lines.push("FriendsSections: " + JSON.stringify(sections && sections.FriendsSections));
+        } catch (e) {
+            lines.push("FriendsSections lookup failed: " + e);
+        }
+
         return lines.join("\n");
+    }
+
+    // Fallback for builds with no rows container: the list is most likely derived from
+    // RelationshipStore.getFriendIDs(). Filtering there is a blunter instrument than the
+    // desktop patch — it drops ignored users from anything reading that list, not just
+    // the two tabs — but it needs no knowledge of the UI layer.
+    function hideViaFriendIds(rs) {
+        if (!rs || typeof rs.getFriendIDs !== "function" || typeof rs.isIgnored !== "function") return false;
+        unpatch = patcher.after("getFriendIDs", rs, function (args, ids) {
+            if (!Array.isArray(ids)) return;
+            return ids.filter(function (id) { return !rs.isIgnored(id); });
+        });
+        return true;
     }
 
     // Desktop rows carry ignoredUser; ask the store if this build's rows don't.
@@ -95,7 +93,14 @@
     return {
         onLoad() {
             var FriendsStore = metro.findByStoreName("FriendsStore");
-            if (!FriendsStore) return report("no FriendsStore in this build\n" + probe());
+            if (!FriendsStore) {
+                var applied = hideViaFriendIds(metro.findByStoreName("RelationshipStore"));
+                return report(
+                    "no FriendsStore in this build; "
+                    + (applied ? "filtering RelationshipStore.getFriendIDs instead" : "getFriendIDs fallback unavailable too")
+                    + "\n" + probe()
+                );
+            }
 
             var state = FriendsStore.getState && FriendsStore.getState();
             var rowsProto = state && state.rows && Object.getPrototypeOf(state.rows);
