@@ -1,0 +1,7 @@
+{
+    "name": "HideIgnoredFriends",
+    "description": "Hides ignored users from the friends list (Online and All tabs)",
+    "authors": [{ "name": "puppy", "id": "0" }],
+    "main": "index.js",
+    "hash": "1"
+}
