@@ -30,12 +30,24 @@ function makeVendetta({ rows = ROWS, relationshipStore = null } = {}) {
         filter(section) { return section === "PENDING_IGNORED" ? this._rows.filter(r => r.ignoredUser) : this._rows; }
     }
     const stores = { FriendsStore: { getState: () => ({ rows: new Rows(rows) }) }, RelationshipStore: relationshipStore };
+    // Stands in for the metro registry the probe walks.
+    const modules = [
+        { getName: () => "RelationshipStore" },
+        { getName: () => "UserStore" },
+        { getName: () => "FriendsRowStore" },
+        { getName() { throw new Error("lazy module exploded"); } },
+        { useFriendsList: () => [] }
+    ];
     return {
         logs,
         Rows,
         vendetta: {
             patcher: { after },
-            metro: { findByStoreName: n => stores[n], common: { clipboard: { setString() {} } } },
+            metro: {
+                findByStoreName: n => stores[n],
+                findAll: pred => { modules.forEach(m => pred(m)); return []; },
+                common: { clipboard: { setString() {} } }
+            },
             ui: { toasts: { showToast() {} } },
             logger: { log: m => logs.push(m) }
         }
@@ -77,12 +89,17 @@ const rowsOf = v => v.metro.findByStoreName("FriendsStore").getState().rows;
     assert.match(t.logs[0] ?? "", /no ignoredUser/, "should report the fallback");
 }
 
-// 4. missing FriendsStore reports instead of throwing
+// 4. missing FriendsStore reports, and the probe dumps what the build does have
 {
     const t = makeVendetta();
     t.vendetta.metro.findByStoreName = () => undefined;
     load(t.vendetta).onLoad();
-    assert.match(t.logs[0] ?? "", /no FriendsStore/);
+    const dump = t.logs[0] ?? "";
+    assert.match(dump, /no FriendsStore/);
+    assert.match(dump, /stores total: 3/, "should count stores, skipping the one that throws");
+    assert.match(dump, /store matches: \[FriendsRowStore,RelationshipStore\]/, "should filter to relevant names");
+    assert.match(dump, /RelationshipStore: not found/);
+    assert.match(dump, /friend-ish exports: \[useFriendsList\]/);
 }
 
 // 5. an unexpected section value is reported, not silently ignored

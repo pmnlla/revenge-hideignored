@@ -26,6 +26,62 @@
         }
     }
 
+    // Called when the expected store isn't there: dump what this build actually has,
+    // so the next version can target it instead of guessing again.
+    function probe() {
+        var lines = [];
+        var names = [];
+
+        try {
+            var seen = {};
+            metro.findAll(function (m) {
+                try {
+                    if (m && typeof m.getName === "function" && m.getName.length === 0) {
+                        var n = m.getName();
+                        if (typeof n === "string") seen[n] = 1;
+                    }
+                } catch (e) { /* lazy module blew up on access; skip it */ }
+                return false;
+            });
+            names = Object.keys(seen).sort();
+        } catch (e) {
+            lines.push("store scan failed: " + e);
+        }
+
+        lines.push("stores total: " + names.length);
+        lines.push("store matches: [" + names.filter(function (n) { return /friend|relation|ignor/i.test(n); }) + "]");
+
+        var rs = metro.findByStoreName("RelationshipStore");
+        if (rs) {
+            var keys = [];
+            for (var o = rs; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+                keys = keys.concat(Object.getOwnPropertyNames(o));
+            }
+            lines.push("RelationshipStore: [" + keys.filter(function (k) {
+                return /ignor|blocked|friend|relationship/i.test(k);
+            }).sort() + "]");
+        } else {
+            lines.push("RelationshipStore: not found");
+        }
+
+        try {
+            var props = {};
+            metro.findAll(function (m) {
+                if (m && typeof m === "object") {
+                    try {
+                        Object.keys(m).forEach(function (k) { if (/friend/i.test(k)) props[k] = 1; });
+                    } catch (e) { /* exotic export; skip */ }
+                }
+                return false;
+            });
+            lines.push("friend-ish exports: [" + Object.keys(props).sort().slice(0, 60) + "]");
+        } catch (e) {
+            lines.push("export scan failed: " + e);
+        }
+
+        return lines.join("\n");
+    }
+
     // Desktop rows carry ignoredUser; ask the store if this build's rows don't.
     function isIgnored(row) {
         if ("ignoredUser" in row) return !!row.ignoredUser;
@@ -39,7 +95,7 @@
     return {
         onLoad() {
             var FriendsStore = metro.findByStoreName("FriendsStore");
-            if (!FriendsStore) return report("no FriendsStore in this build");
+            if (!FriendsStore) return report("no FriendsStore in this build\n" + probe());
 
             var state = FriendsStore.getState && FriendsStore.getState();
             var rowsProto = state && state.rows && Object.getPrototypeOf(state.rows);
